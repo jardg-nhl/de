@@ -98,7 +98,6 @@ def record_batch(c, name, lo, hi, limit=None):
                 if lo and ts < lo: continue
                 if hi and ts >= hi: continue
             else:
-                # Snapshot dimensions are captured exactly once; their change feed is synthesized separately.
                 if c.execute("SELECT 1 FROM watermarks WHERE source_file=?",(name,)).fetchone(): break
             read+=1; rh=digest(row); h.update(rh.encode())
             chunk.append((name,"movielens",bid,NOW(),rownum,rh,json.dumps(row,ensure_ascii=False,separators=(",",":"))))
@@ -179,11 +178,9 @@ def synthesize_movie_changes(c):
     if len(allrows)!=EXPECTED_ROWS["movie"]: raise RuntimeError(f"Landing reconciliation failed for movie: expected {EXPECTED_ROWS['movie']}, read {len(allrows)}")
     # Catalog snapshot has no valid-from timestamp; use an explicit baseline convention before all observed events.
     stamp="1900-01-01T00:00:00+00:00"
-    # Preserve catalog baseline in Bronze then add deterministic synthetic CDC in cycles.
     for i,r in enumerate(allrows,1):
         rh=digest(r); c.execute("INSERT OR IGNORE INTO bronze VALUES(?,?,?,?,?,?,?)",("movie","movielens",bid,NOW(),i,rh,json.dumps(r,ensure_ascii=False)))
     c.commit(); assert_no_blocking_failures(c)
-    # Synthetic feed: explicit inserts; update semantic attributes for selected records; soft deletes.
     changes=[]; n=len(allrows)
     for j,r in enumerate(allrows):
         mid=int(r["movieId"])
@@ -222,12 +219,10 @@ def movies_to_gold(c):
             elif title_changed:
                 c.execute("UPDATE dim_movie SET previous_title=?,changed_date=? WHERE movie_sk=?",(cur[1],effective,cur[0]))
         c.execute("INSERT OR IGNORE INTO lineage VALUES('dim_movie',?,?,?,?)",(str(mid),"movie.csv",bid,rh))
-    # Inferred members preserve event facts whose content has not arrived in the catalog yet.
     c.execute("INSERT OR IGNORE INTO dim_movie(movie_id,title,release_year,genres_json,is_deleted,effective_from,is_current,version,source_file,batch_id,record_hash) SELECT DISTINCT e.content_id,'Unknown movie '||e.content_id,NULL,'[]',0,'1900-01-01T00:00:00+00:00',1,1,'inferred','inferred',NULL FROM silver_events e LEFT JOIN dim_movie d ON d.movie_id=e.content_id AND d.is_current=1 WHERE e.content_id IS NOT NULL AND d.movie_id IS NULL")
     c.commit()
 
 def load_static(c):
-    # Static dimensions/facts are loaded once and keyed UPSERTs make retries safe.
     for table in ("link","genome_tags","genome_scores"):
         path=LAKE/"landing"/f"{table}.csv"; bid=batch_id(table,"snapshot","v1")
         if c.execute("SELECT 1 FROM control WHERE batch_id=? AND status='SUCCESS'",(bid,)).fetchone(): continue
@@ -249,14 +244,12 @@ def load_static(c):
         if bronze_chunk: c.executemany("INSERT OR IGNORE INTO bronze VALUES(?,?,?,?,?,?,?)",bronze_chunk)
         if rows!=EXPECTED_ROWS[table]: raise RuntimeError(f"Landing reconciliation failed for {table}: expected {EXPECTED_ROWS[table]}, read {rows}")
         c.execute("INSERT OR REPLACE INTO control(batch_id,source_file,source_system,status,rows_read,rows_written,checksum,started_at,finished_at) VALUES(?,?,?,'SUCCESS',?,?,?,?,?)",(bid,table+".csv","movielens",rows,rows,sha_file(path),NOW(),NOW()))
-    # Build one conformed party dimension and resolve point-in-time movie surrogate keys.
     c.execute("INSERT OR IGNORE INTO dim_user(user_id,first_seen,source_file,batch_id) SELECT party_id,MIN(event_time_utc),'rating/tag','incremental' FROM silver_events WHERE party_id IS NOT NULL GROUP BY party_id")
     c.execute("INSERT INTO fact_interaction SELECT e.event_id,u.user_sk,d.movie_sk,e.party_id,e.content_id,e.event_type,e.event_value,e.event_time_utc,e.source_file,e.batch_id,e.record_hash,e.event_text FROM silver_events e LEFT JOIN dim_user u ON u.user_id=e.party_id LEFT JOIN dim_movie d ON d.movie_id=e.content_id AND e.event_time_utc>=d.effective_from AND (d.effective_to IS NULL OR e.event_time_utc<d.effective_to) WHERE 1 ON CONFLICT(event_id) DO UPDATE SET user_sk=excluded.user_sk,movie_sk=excluded.movie_sk WHERE fact_interaction.movie_sk IS NULL OR fact_interaction.movie_sk<>excluded.movie_sk")
     c.commit()
 
 def report(c):
     out=LAKE/"reports"; out.mkdir(exist_ok=True)
-    # reproducible CSV marts using SQL aggregations.
     queries={
       "top_movies.csv":"SELECT f.content_id movie_id, d.title,COUNT(*) ratings,ROUND(AVG(f.event_value)/20.0,4) avg_rating,ROUND(AVG((f.event_value/20.0)*(f.event_value/20.0))-AVG(f.event_value/20.0)*AVG(f.event_value/20.0),4) variance FROM fact_interaction f JOIN dim_movie d ON d.movie_id=f.content_id WHERE f.event_type='RATING' AND d.is_current=1 AND d.is_deleted=0 GROUP BY f.content_id HAVING COUNT(*)>=100 ORDER BY avg_rating DESC,ratings DESC",
       "genre_summary.csv":"SELECT g.genre,COUNT(*) interactions,ROUND(AVG(f.event_value)/20.0,4) mean_rating,ROUND(AVG((f.event_value/20.0)*(f.event_value/20.0))-AVG(f.event_value/20.0)*AVG(f.event_value/20.0),4) variance FROM fact_interaction f JOIN dim_movie d ON d.movie_sk=f.movie_sk JOIN json_each(d.genres_json) g WHERE f.event_type='RATING' GROUP BY g.genre ORDER BY variance DESC",
@@ -268,8 +261,6 @@ def report(c):
         cur=c.execute(q); rows=cur.fetchall()
         with open(out/filename,"w",newline="",encoding="utf-8") as f:
             w=csv.writer(f); w.writerow([x[0] for x in cur.description]); w.writerows(rows)
-    # Governed text normalization: Unicode NFKC, casefold, trim/collapse spaces, strip edge punctuation.
-    # Only this derived report changes tag text; Bronze remains exact source data.
     movie_rating={mid:(n,avg) for mid,n,avg in c.execute("SELECT content_id,COUNT(*),AVG(event_value)/20.0 FROM fact_interaction WHERE event_type='RATING' GROUP BY content_id")}
     tag_movies={}; tag_events=Counter()
     for (payload,) in c.execute("SELECT payload FROM bronze WHERE source_file='tag'"):
@@ -305,7 +296,6 @@ def report(c):
         w=csv.writer(f); w.writerow(["movie_id","title","tag","relevance"])
         cur=c.execute("SELECT g.movie_id,m.title,t.tag,g.relevance FROM fact_genome g JOIN dim_genome_tag t USING(tag_id) LEFT JOIN dim_movie m ON m.movie_id=g.movie_id WHERE g.relevance>=0.9 ORDER BY g.relevance DESC LIMIT 500")
         w.writerows(cur.fetchall())
-    # A concrete catalog segment answers the brief's request to describe a selected movie group.
     with open(out/"genome_action_group.csv","w",newline="",encoding="utf-8") as f:
         w=csv.writer(f); w.writerow(["genre_group","genome_tag","movies_with_score","mean_relevance"])
         cur=c.execute("SELECT 'Action',t.tag,COUNT(DISTINCT g.movie_id),ROUND(AVG(g.relevance),4) FROM fact_genome g JOIN dim_genome_tag t USING(tag_id) JOIN dim_movie m ON m.movie_id=g.movie_id JOIN json_each(m.genres_json) genre WHERE genre.value='Action' AND m.is_current=1 AND m.is_deleted=0 GROUP BY t.tag ORDER BY AVG(g.relevance) DESC LIMIT 20")
@@ -321,7 +311,6 @@ def report(c):
     for rule,severity,query in checks:
         observed=c.execute(query).fetchone()[0]; c.execute("INSERT INTO dq_results VALUES(?,?,?,?,?,?,?)",(dq_batch,rule,severity,int(observed==0),observed,0,"count of records violating rule"))
     c.commit()
-    # report batch audit and quality summary
     with open(out/"batch_audit.csv","w",newline="",encoding="utf-8") as f:
         cur=c.execute("SELECT batch_id,source_file,source_system,event_from,event_to,status,rows_read,rows_written,rows_quarantined,checksum,watermark,started_at,finished_at FROM control ORDER BY started_at"); w=csv.writer(f); w.writerow([x[0] for x in cur.description]); w.writerows(cur.fetchall())
     with open(out/"dq_results.csv","w",newline="",encoding="utf-8") as f:
@@ -337,7 +326,6 @@ def run(args):
         cutoff=args.as_of
         ingest_event_years(c,name,cutoff,args.chunk_size)
         c.commit()
-    # Movie snapshot baseline and CDC; only new Bronze records are merged on each invocation.
     assert_no_blocking_failures(c)
     movies_to_gold(c); load_static(c); assert_no_blocking_failures(c); report(c); c.close()
 

@@ -24,7 +24,6 @@ for cell in nb['cells']:
             if p.startswith('# '): parts.append('<h1>'+html.escape(p[2:])+'</h1>')
             elif p.startswith('## '): parts.append('<h2>'+html.escape(p[3:])+'</h2>')
             else: parts.append('<p>'+html.escape(p).replace('\n','<br>')+'</p>')
-    # The HTML is a reading preview; runnable code stays in the .ipynb.
 report_names=['top_movies.csv','genre_summary.csv','rating_by_year.csv','rating_by_event_month.csv','popular_tags.csv','tag_rating_association.csv','hidden_gems.csv','genome_coverage.csv','genome_action_group.csv']
 available=[]
 for name in report_names:
