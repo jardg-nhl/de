@@ -24,16 +24,21 @@ for cell in nb['cells']:
             if p.startswith('# '): parts.append('<h1>'+html.escape(p[2:])+'</h1>')
             elif p.startswith('## '): parts.append('<h2>'+html.escape(p[3:])+'</h2>')
             else: parts.append('<p>'+html.escape(p).replace('\n','<br>')+'</p>')
-    else: parts.append('<pre><code>'+html.escape(source)+'</code></pre>')
-for name in ['top_movies.csv','genre_summary.csv','rating_by_year.csv','rating_by_event_month.csv','popular_tags.csv','tag_rating_association.csv','hidden_gems.csv','genome_coverage.csv']:
+    # The HTML is a reading preview; runnable code stays in the .ipynb.
+report_names=['top_movies.csv','genre_summary.csv','rating_by_year.csv','rating_by_event_month.csv','popular_tags.csv','tag_rating_association.csv','hidden_gems.csv','genome_coverage.csv','genome_action_group.csv']
+available=[]
+for name in report_names:
     path=ROOT/'lakehouse'/'reports'/name
     if not path.exists(): continue
+    available.append(name)
     with path.open(encoding='utf-8',newline='') as f:
         rows=list(csv.reader(f))
     if not rows: continue
     parts.append('<h2>'+html.escape(name.replace('_',' ').removesuffix('.csv').title())+'</h2><table border="1" cellpadding="6" cellspacing="0"><thead><tr>'+''.join('<th>'+html.escape(c)+'</th>' for c in rows[0])+'</tr></thead><tbody>')
     for row in rows[1:11]: parts.append('<tr>'+''.join('<td>'+html.escape(v)+'</td>' for v in row)+'</tr>')
     parts.append('</tbody></table>')
+if not available:
+    parts.append("<p class='note'>No generated Gold reports were found in <code>lakehouse/reports</code>. Run the pipeline, then regenerate this HTML preview to include measured results.</p>")
 parts.append("</body></html>")
 (ROOT/"notebooks"/"movie_analytics.html").write_text('\n'.join(parts),encoding="utf-8")
 print(ROOT/"notebooks"/"movie_analytics.html")

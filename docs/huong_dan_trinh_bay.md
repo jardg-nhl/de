@@ -154,8 +154,8 @@ Nếu chỉ join `is_current=1`, sự kiện cũ có thể bị gán thể loạ
 1. **Xếp hạng phim:** `top_movies.csv` yêu cầu tối thiểu 100 lượt rating. Ngưỡng hạn chế phim chỉ có vài đánh giá cực đoan đứng đầu; số lượt vẫn được xuất để người đọc hiểu độ tin cậy.
 2. **Thể loại:** `genre_summary.csv` tính số rating, trung bình và phương sai; phim nhiều thể loại đóng góp vào từng thể loại tương ứng. Bảng sắp theo phương sai giảm dần để nhận diện thể loại bất đồng cao.
 3. **Xu hướng:** `rating_by_year.csv` dùng năm cuối title; `rating_by_event_month.csv` dùng tháng người dùng đánh giá. Hai báo cáo mô tả xu hướng, không khẳng định quan hệ nhân quả.
-4. **Tag:** chuẩn hóa Unicode NFKC, chữ thường, khoảng trắng và dấu câu; quy một số biến thể phổ biến về `sci-fi`. `popular_tags.csv` đếm mức dùng; `tag_rating_association.csv` so sánh rating trung bình của nhóm phim được tag với trung bình toàn cục. Đây là association, không phải tác động nhân quả.
-5. **Genome:** `genome_coverage.csv` đo số movie có score trên catalog active; `genome_top_descriptors.csv` liệt kê đặc trưng relevance cao. Genome score là dữ liệu suy ra từ mô hình, không phải tag do người dùng nhập.
+4. **Tag:** chuẩn hóa Unicode NFKC, chữ thường, khoảng trắng và dấu câu; quy một số biến thể phổ biến về `sci-fi`. `popular_tags.csv` đếm mức dùng; `tag_rating_association.csv` tính point-biserial/Pearson giữa sự hiện diện tag trên phim và rating trung bình phim, đồng thời xuất chênh lệch với trung bình toàn cục. Đây là association, không phải tác động nhân quả.
+5. **Genome:** `genome_coverage.csv` đo số movie có score trên catalog active; `genome_action_group.csv` mô tả các descriptor có relevance trung bình cao nhất trong nhóm phim Action đang active và số phim hỗ trợ mỗi descriptor. Genome score là dữ liệu suy ra từ mô hình, không phải tag do người dùng nhập.
 6. **Hidden gems:** `hidden_gems.csv` chọn rating trung bình ≥4, từ 10 đến 99 lượt đánh giá, phim còn active; kèm URL IMDb zero-pad 7 chữ số và URL TMDb.
 
 Ngưỡng hidden gem được công khai để có thể điều chỉnh. Nếu bỏ ngưỡng rating tối thiểu, một vài lượt đánh giá tình cờ có thể làm phim nổi bật giả tạo.

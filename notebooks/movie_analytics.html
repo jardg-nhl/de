@@ -1,50 +1,12 @@
 <!doctype html><html><head><meta charset='utf-8'><title>CineInsight MovieLens Analytics</title><style>body{font:16px/1.6 system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 24px;color:#172033}h1,h2{color:#183153}pre{background:#f3f5f8;padding:16px;overflow:auto;border-radius:8px}code{font-family:ui-monospace,monospace} .note{padding:12px 16px;background:#eef5ff;border-left:4px solid #3478c9}</style></head><body><h1>CineInsight MovieLens 20M: profiling and analytics</h1>
-<h2>Observed source profile</h2><table border='1' cellpadding='8' cellspacing='0'><tr><th>File</th><th>Rows</th><th>Empty cells</th></tr>
-<tr><td>rating.csv</td><td>20,000,263</td><td>0</td></tr>
-<tr><td>tag.csv</td><td>465,564</td><td>7</td></tr>
-<tr><td>movie.csv</td><td>27,278</td><td>0</td></tr>
-<tr><td>link.csv</td><td>27,278</td><td>252</td></tr>
-<tr><td>genome_scores.csv</td><td>11,709,768</td><td>0</td></tr>
-<tr><td>genome_tags.csv</td><td>1,128</td><td>0</td></tr>
-<p>Rating values: <code>{&quot;0.5&quot;: 239125, &quot;1&quot;: 680732, &quot;1.5&quot;: 279252, &quot;2&quot;: 1430997, &quot;2.5&quot;: 883398, &quot;3&quot;: 4291193, &quot;3.5&quot;: 2200156, &quot;4&quot;: 5561926, &quot;4.5&quot;: 1534824, &quot;5&quot;: 2898660}</code></p><p>Event range: 1995-01-09T11:46:44+00:00 to 2015-03-31T06:40:02+00:00. Exact duplicate user/movie pairs: 0; ordering check: True.</p><p>Rating skew indicators: max per user 9,254 versus median 68; highest-volume movie has 67,310 ratings.</p>
-<p>Movie catalog quality: 26 titles lack a terminal year; 246 use the explicit no-genre sentinel.</p>
-<p>Tag quality: 7 blank/whitespace tags.</p>
-<p>Link quality: 252 missing TMDb identifiers.</p>
+<p class='note'>Run <code>src/profile.py</code> to populate observed source counts.</p>
 <h1>CineInsight MovieLens 20M: profiling and analytics</h1>
 <p>This notebook accompanies the local medallion pipeline. Run `src/profile.py`, then `src/pipeline.py run`; the analysis reads the resulting profile and Gold marts. It reports sampled key uniqueness explicitly rather than implying a full-table exact check.</p>
-<pre><code>from pathlib import Path
-import json, sqlite3, pandas as pd
-ROOT = Path.cwd()
-profile = json.loads((ROOT/&#x27;lakehouse/reports/profile.json&#x27;).read_text(encoding=&#x27;utf-8&#x27;))
-pd.DataFrame([{&#x27;file&#x27;:x[&#x27;file&#x27;],&#x27;rows&#x27;:x[&#x27;rows&#x27;],&#x27;empty_cells&#x27;:x[&#x27;empty_cells&#x27;]} for x in profile])</code></pre>
 <h2>Data risks and design choices</h2>
 <p>The rating table drives the largest scan and should be partitioned by event month with clustering on movie/user. Do not partition on user ID. Rating values are expected on half-star increments in [0.5, 5]; release year is a parsed terminal suffix and can be absent; `(no genres listed)` is an explicit sentinel. Tags are user-entered free text and require trimming/case normalization before aggregation. Genome relevance is derived model output, not a user tag. The sampled `(userId,movieId)` check is only diagnostic: repeated ratings across time are valid events, so the event identity includes timestamp and value.</p>
-<pre><code>for item in profile:
-    print(item[&#x27;file&#x27;], item[&#x27;rows&#x27;])
-    if &#x27;rating_distribution&#x27; in item:
-        print(&#x27;rating values:&#x27;, item[&#x27;rating_distribution&#x27;])
-        print(&#x27;sample duplicate user/movie pairs:&#x27;, item[&#x27;user_movie_duplicate_count_first_100k_rows&#x27;])
-        print(&#x27;event range:&#x27;, item[&#x27;event_time_min&#x27;], &#x27;to&#x27;, item[&#x27;event_time_max&#x27;])
-    if &#x27;year_suffix_distribution&#x27; in item:
-        print(&#x27;year suffix distribution:&#x27;, item[&#x27;year_suffix_distribution&#x27;])</code></pre>
 <h2>Gold marts</h2>
-<p>The SQL outputs use a minimum 100-rating threshold for ranking. Without it, titles with one or two ratings can float to the top on chance. Genre variance uses population variance of rating values. The time charts are descriptive, not causal. Hidden gems are defined as a mean rating ≥4.0 with 10–99 ratings and an active, non-deleted movie. IMDb IDs are restored to seven digits in their URLs.</p>
-<pre><code>reports = ROOT/&#x27;lakehouse/reports&#x27;
-for name in [&#x27;top_movies.csv&#x27;,&#x27;genre_summary.csv&#x27;,&#x27;rating_by_year.csv&#x27;,&#x27;rating_by_event_month.csv&#x27;,&#x27;hidden_gems.csv&#x27;]:
-    path = reports/name
-    if path.exists():
-        print(&#x27;\n&#x27;, name)
-        display(pd.read_csv(path).head(15))
-    else:
-        print(name, &#x27;not generated yet; run src/pipeline.py run&#x27;)</code></pre>
-<h2>Genome coverage</h2>
-<p>Coverage is the share of active catalog movies with at least one row in `fact_genome`. Top relevance descriptors should be summarized per selected movie/group, with `dim_genome_tag` labels. Genome scores are algorithmically derived and should not be conflated with raw user tags.</p>
-<pre><code>db = ROOT/&#x27;lakehouse/cineinsight.db&#x27;
-if db.exists():
-    with sqlite3.connect(db) as con:
-        active = con.execute(&#x27;select count(*) from dim_movie where is_current=1 and is_deleted=0&#x27;).fetchone()[0]
-        covered = con.execute(&#x27;select count(distinct movie_id) from fact_genome&#x27;).fetchone()[0]
-        print({&#x27;active_movies&#x27;: active, &#x27;genome_covered_movies&#x27;: covered, &#x27;coverage_pct&#x27;: round(100*covered/active,2) if active else None})
-else:
-    print(&#x27;Run the pipeline to calculate genome coverage.&#x27;)</code></pre>
+<p>The SQL outputs use a minimum 100-rating threshold for ranking. Without it, titles with one or two ratings can float to the top on chance. Genre variance uses population variance of rating values. Tag results include point-biserial (Pearson) correlation between a movie&#x27;s normalized tag presence and its mean rating, using one observation per rated movie; the statistic is descriptive, not causal. The time charts are descriptive, not causal. Hidden gems are defined as a mean rating ≥4.0 with 10–99 ratings and an active, non-deleted movie. IMDb IDs are restored to seven digits in their URLs.</p>
+<h2>Genome coverage and selected group</h2>
+<p>Coverage is the share of active catalog movies with at least one row in `fact_genome`. `genome_action_group.csv` summarizes the highest mean-relevance descriptors across active Action movies and counts the movies supporting each descriptor. Genome scores are algorithmically derived and should not be conflated with raw user tags.</p>
+<p class='note'>No generated Gold reports were found in <code>lakehouse/reports</code>. Run the pipeline, then regenerate this HTML preview to include measured results.</p>
 </body></html>

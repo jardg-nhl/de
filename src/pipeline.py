@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CineInsight local medallion pipeline; standard-library only."""
 from __future__ import annotations
-import argparse, csv, hashlib, json, re, shutil, sqlite3, sys, uuid, unicodedata, string
+import argparse, csv, hashlib, json, math, re, shutil, sqlite3, sys, uuid, unicodedata, string
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -190,7 +190,7 @@ def synthesize_movie_changes(c):
         if j%5000==0:
             d=dict(r); d["movieId"]=str(1000000+mid); d["title"]=r["title"]+" (CineInsight Added)"; changes.append(("INSERT",d))
         if j%5000==1:
-            d=dict(r); d["title"]=(r["title"] or "").replace(" "," ",1); d["genres"]=(r["genres"]+"|Drama") if r["genres"] and r["genres"]!="(no genres listed)" and "Drama" not in r["genres"] else r["genres"]; changes.append(("UPDATE",d))
+            d=dict(r); title=d.get("title") or ""; d["title"]=re.sub(r"\s+(?=\(\d{4}\)\s*$)"," Director's Cut ",title) if re.search(r"\(\d{4}\)\s*$",title) else title+" Director's Cut"; d["genres"]=(r["genres"]+"|Drama") if r["genres"] and r["genres"]!="(no genres listed)" and "Drama" not in r["genres"] else r["genres"]; changes.append(("UPDATE",d))
         if j%5000==2: changes.append(("DELETE",dict(r)))
     chbid=batch_id("movie_changes","synthetic","v1")
     for i,(op,r) in enumerate(changes,1):
@@ -210,13 +210,17 @@ def movies_to_gold(c):
         cur=c.execute("SELECT movie_sk,title,release_year,genres_json,is_deleted,version FROM dim_movie WHERE movie_id=? AND is_current=1",(mid,)).fetchone()
         if not cur:
             c.execute("INSERT INTO dim_movie(movie_id,title,release_year,genres_json,is_deleted,effective_from,is_current,version,source_file,batch_id,record_hash) VALUES(?,?,?,?,?,?,1,1,'movie.csv',?,?)",(mid,title,year,json.dumps(genres),deleted,effective,bid,rh))
-        elif (cur[3],cur[4])!=(json.dumps(genres),deleted):
-            c.execute("UPDATE dim_movie SET effective_to=?,is_current=0 WHERE movie_sk=?",(effective,cur[0]))
-            c.execute("INSERT INTO dim_movie(movie_id,title,release_year,genres_json,is_deleted,effective_from,is_current,version,previous_title,changed_date,source_file,batch_id,record_hash) VALUES(?,?,?,?,?,?,1,?,?,?,'movie.csv',?,?)",(mid,title,year,json.dumps(genres),deleted,effective,cur[5]+1,cur[1],effective,bid,rh))
-        elif (cur[1],cur[2])!=(title,year):
-            # Type 1 correction: propagate corrected display title/year across versions.
-            c.execute("UPDATE dim_movie SET title=?,release_year=? WHERE movie_id=?",(title,year,mid))
-            c.execute("UPDATE dim_movie SET previous_title=?,changed_date=? WHERE movie_sk=?",(cur[1],effective,cur[0]))
+        else:
+            title_changed=(cur[1],cur[2])!=(title,year)
+            type2_changed=(cur[3],cur[4])!=(json.dumps(genres),deleted)
+            # Apply Type 1 corrections even if the same CDC row also changes a Type 2 attribute.
+            if title_changed:
+                c.execute("UPDATE dim_movie SET title=?,release_year=? WHERE movie_id=?",(title,year,mid))
+            if type2_changed:
+                c.execute("UPDATE dim_movie SET effective_to=?,is_current=0 WHERE movie_sk=?",(effective,cur[0]))
+                c.execute("INSERT INTO dim_movie(movie_id,title,release_year,genres_json,is_deleted,effective_from,is_current,version,previous_title,changed_date,source_file,batch_id,record_hash) VALUES(?,?,?,?,?,?,1,?,?,?,'movie.csv',?,?)",(mid,title,year,json.dumps(genres),deleted,effective,cur[5]+1,cur[1],effective if title_changed else None,bid,rh))
+            elif title_changed:
+                c.execute("UPDATE dim_movie SET previous_title=?,changed_date=? WHERE movie_sk=?",(cur[1],effective,cur[0]))
         c.execute("INSERT OR IGNORE INTO lineage VALUES('dim_movie',?,?,?,?)",(str(mid),"movie.csv",bid,rh))
     # Inferred members preserve event facts whose content has not arrived in the catalog yet.
     c.execute("INSERT OR IGNORE INTO dim_movie(movie_id,title,release_year,genres_json,is_deleted,effective_from,is_current,version,source_file,batch_id,record_hash) SELECT DISTINCT e.content_id,'Unknown movie '||e.content_id,NULL,'[]',0,'1900-01-01T00:00:00+00:00',1,1,'inferred','inferred',NULL FROM silver_events e LEFT JOIN dim_movie d ON d.movie_id=e.content_id AND d.is_current=1 WHERE e.content_id IS NOT NULL AND d.movie_id IS NULL")
@@ -279,12 +283,18 @@ def report(c):
         w=csv.writer(f); w.writerow(["normalized_tag","tag_events","distinct_movies"])
         for tag,n in tag_events.most_common(): w.writerow([tag,n,len(tag_movies[tag])])
     with open(out/"tag_rating_association.csv","w",newline="",encoding="utf-8") as f:
-        w=csv.writer(f); w.writerow(["normalized_tag","distinct_tagged_movies_with_ratings","mean_movie_rating","global_mean_rating","difference_from_global"])
-        global_mean=c.execute("SELECT AVG(event_value)/20.0 FROM fact_interaction WHERE event_type='RATING'").fetchone()[0]
+        w=csv.writer(f)
+        rated_values=[avg for _,avg in movie_rating.values()]; n_movies=len(rated_values); sum_y=sum(rated_values); sum_y2=sum(y*y for y in rated_values)
+        global_mean=sum_y/n_movies if n_movies else None
         vals=[]
         for tag,movies in tag_movies.items():
             avgs=[movie_rating[mid][1] for mid in movies if mid in movie_rating]
-            if avgs: vals.append((tag,len(avgs),sum(avgs)/len(avgs),global_mean,sum(avgs)/len(avgs)-global_mean))
+            k=len(avgs)
+            if avgs:
+                sum_xy=sum(avgs); var_x=k*(n_movies-k)/n_movies if n_movies else 0; var_y=sum_y2-sum_y*sum_y/n_movies if n_movies else 0
+                correlation=(sum_xy-k*sum_y/n_movies)/math.sqrt(var_x*var_y) if var_x>0 and var_y>0 else None
+                vals.append((tag,k,sum(avgs)/k,global_mean,sum(avgs)/k-global_mean,correlation))
+        w.writerow(["normalized_tag","rated_movies_with_tag","mean_movie_rating","global_mean_rating","difference_from_global","pearson_r_tag_presence_vs_movie_mean"])
         w.writerows(sorted(vals,key=lambda x:(-x[1],x[0])))
     with open(out/"genome_coverage.csv","w",newline="",encoding="utf-8") as f:
         w=csv.writer(f); w.writerow(["active_catalog_movies","genome_covered_movies","coverage_pct"])
@@ -294,6 +304,11 @@ def report(c):
     with open(out/"genome_top_descriptors.csv","w",newline="",encoding="utf-8") as f:
         w=csv.writer(f); w.writerow(["movie_id","title","tag","relevance"])
         cur=c.execute("SELECT g.movie_id,m.title,t.tag,g.relevance FROM fact_genome g JOIN dim_genome_tag t USING(tag_id) LEFT JOIN dim_movie m ON m.movie_id=g.movie_id WHERE g.relevance>=0.9 ORDER BY g.relevance DESC LIMIT 500")
+        w.writerows(cur.fetchall())
+    # A concrete catalog segment answers the brief's request to describe a selected movie group.
+    with open(out/"genome_action_group.csv","w",newline="",encoding="utf-8") as f:
+        w=csv.writer(f); w.writerow(["genre_group","genome_tag","movies_with_score","mean_relevance"])
+        cur=c.execute("SELECT 'Action',t.tag,COUNT(DISTINCT g.movie_id),ROUND(AVG(g.relevance),4) FROM fact_genome g JOIN dim_genome_tag t USING(tag_id) JOIN dim_movie m ON m.movie_id=g.movie_id JOIN json_each(m.genres_json) genre WHERE genre.value='Action' AND m.is_current=1 AND m.is_deleted=0 GROUP BY t.tag ORDER BY AVG(g.relevance) DESC LIMIT 20")
         w.writerows(cur.fetchall())
     dq_batch="GOLD-QUALITY-CURRENT"; c.execute("DELETE FROM dq_results WHERE batch_id=?",(dq_batch,))
     checks=[

@@ -24,6 +24,6 @@ Outputs live under `lakehouse/` (SQLite database, immutable landing copies, quar
 - `dags/cineinsight_daily.py`: Airflow DAG adapter with explicit stages/retries/SLA and backfill-compatible schedule.
 - `docs/architecture.md`: decisions, mappings, contracts, ERD, DQ rules, replay and operational notes.
 - `docs/huong_dan_trinh_bay.md`: Vietnamese stage-by-stage and code explanation for the project defense.
-- `notebooks/movie_analytics.ipynb` and `.html`: profiling and analytical findings, generated from supplied files.
+- `notebooks/movie_analytics.ipynb` and `.html`: profiling and analytical findings. Regenerate the HTML after `pipeline.py run` with `python src/export_notebook_html.py` to include the latest Gold report tables.
 
 SQLite implements transactions and UPSERT but is not a distributed lakehouse table format. For a production multi-node deployment, retain the contracts and replace storage adapters with Spark/Delta or Iceberg MERGE tables, object storage, and a catalog.
