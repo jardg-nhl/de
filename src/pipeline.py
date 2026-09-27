@@ -7,11 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "MovieLens"
-LAKE = ROOT / "lakehouse"
-DB = LAKE / "cineinsight.db"
+CONFIG = json.loads((ROOT / "config" / "pipeline.json").read_text(encoding="utf-8"))
+SOURCE = ROOT / CONFIG["paths"]["source"]
+LAKE = ROOT / CONFIG["paths"]["lakehouse"]
+DB = ROOT / CONFIG["paths"]["control_database"]
+LEGACY_DB = LAKE / "cineinsight.db"
 TABLES = ["movie", "link", "genome_tags", "genome_scores", "rating", "tag"]
-EXPECTED_ROWS = {"rating":20000263,"tag":465564,"movie":27278,"link":27278,"genome_tags":1128,"genome_scores":11709768}
+EXPECTED_ROWS = CONFIG["expected_rows"]
 DDL = """
 CREATE TABLE IF NOT EXISTS control(batch_id TEXT PRIMARY KEY, source_file TEXT, source_system TEXT, event_from TEXT, event_to TEXT, status TEXT, rows_read INTEGER DEFAULT 0, rows_written INTEGER DEFAULT 0, rows_quarantined INTEGER DEFAULT 0, checksum TEXT, watermark TEXT, started_at TEXT, finished_at TEXT, message TEXT);
 CREATE TABLE IF NOT EXISTS watermarks(source_file TEXT PRIMARY KEY, event_time TEXT, last_batch TEXT);
@@ -49,6 +51,9 @@ def digest(v):
 def init():
     (LAKE / "landing").mkdir(parents=True, exist_ok=True)
     (LAKE / "reports").mkdir(parents=True, exist_ok=True)
+    DB.parent.mkdir(parents=True, exist_ok=True)
+    if not DB.exists() and LEGACY_DB.exists():
+        shutil.copy2(LEGACY_DB, DB)
     with connect() as c:
         for name in TABLES:
             src = SOURCE / f"{name}.csv"
@@ -331,7 +336,7 @@ def run(args):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__); sub=p.add_subparsers(dest="cmd",required=True)
-    sub.add_parser("init"); r=sub.add_parser("run"); r.add_argument("--chunk-size",type=int,default=100000); r.add_argument("--as-of",help="UTC cutoff YYYY-MM-DD")
+    sub.add_parser("init"); r=sub.add_parser("run"); r.add_argument("--chunk-size",type=int,default=CONFIG["processing"]["default_chunk_size"]); r.add_argument("--as-of",help="UTC cutoff YYYY-MM-DD")
     sub.add_parser("report"); args=p.parse_args()
     if args.cmd=="init": init()
     elif args.cmd=="run": run(args)

@@ -1,6 +1,6 @@
-# Hướng dẫn trình bày dự án CineInsight bằng tiếng Việt
+# Hướng dẫn trình bày dự án CineInsight
 
-Tài liệu này giải thích **lý do thiết kế và luồng chạy** của project để bạn có thể bảo vệ bài làm. Mã nguồn chính nằm ở `src/pipeline.py`; phần profiling ở `src/profile.py`; DAG ở `dags/cineinsight_daily.py`. Các mục “Cách trình bày” có thể dùng làm lời thoại khi thuyết trình.
+Tài liệu này giải thích **lý do thiết kế và luồng chạy** của project để bạn có thể bảo vệ bài làm. Mã nguồn chính nằm ở `src/pipeline.py`; phần profiling ở `src/ingestion/profiling.py`; DAG ở `dags/cineinsight_pipeline.py`. Các mục “Cách trình bày” có thể dùng làm lời thoại khi thuyết trình.
 
 ## 1. Tóm tắt dự án
 
@@ -12,15 +12,17 @@ CineInsight xây dựng nền tảng dữ liệu phân tích từ MovieLens 20M 
 
 ## 2. Cấu trúc project và nơi đọc code
 
-| Tệp | Nội dung cần giải thích |
-|---|---|
-| `src/pipeline.py` | Luồng Landing → Bronze → Silver → Gold, DQ, SCD và báo cáo |
-| `src/profile.py` | Đọc CSV theo luồng, đếm record/null, phân bố rating, skew và kiểm tra khóa rating |
-| `src/export_notebook_html.py` | Xuất notebook preview HTML không cần cài Jupyter |
-| `dags/cineinsight_daily.py` | Lịch chạy, dependency, retry, SLA và timeout của Airflow |
-| `docs/architecture.md` | Layer contract, mapping CDM, DQ, ERD, SCD và giới hạn của bản local |
-| `notebooks/movie_analytics.ipynb` | Notebook profiling và truy vấn các mart sau khi pipeline sinh dữ liệu |
-| `notebooks/movie_analytics.html` | Bản xem nhanh của notebook kèm phát hiện profiling |
+| Tệp                               | Nội dung cần giải thích                                                           |
+| --------------------------------- | --------------------------------------------------------------------------------- |
+| `src/pipeline.py`                 | Luồng Landing → Bronze → Silver → Gold, DQ, SCD và báo cáo                        |
+| `src/ingestion/profiling.py`      | Đọc CSV theo luồng, đếm record/null, phân bố rating, skew và kiểm tra khóa rating |
+| `src/analytics/export_notebook_html.py` | Xuất notebook preview HTML không cần cài Jupyter                            |
+| `dags/cineinsight_pipeline.py`    | Lịch chạy, dependency, retry, SLA và timeout của Airflow                          |
+| `config/pipeline.json`            | Đường dẫn dữ liệu, database điều khiển, chunk size và số dòng kỳ vọng              |
+| `docs/architecture.md`            | Layer contract, mapping CDM, DQ, ERD, SCD và giới hạn của bản local               |
+| `notebooks/phase1_profiling.ipynb` | Notebook profiling nguồn                                                         |
+| `notebooks/phase5_analytics.ipynb` | Notebook phân tích các mart                                                     |
+| `notebooks/phase5_analytics.html`  | Bản HTML xem nhanh các kết quả phân tích                                         |
 
 `README.md` hướng dẫn chạy. `MovieLens/` là dữ liệu đầu vào. `lakehouse/` là thư mục runtime do pipeline tạo, không cần nộp database hay Landing copy.
 
@@ -42,18 +44,18 @@ Các dimension nhỏ và `genome_scores` được đọc trong `load_static()`. 
 
 ### 3.3. Profiling thực tế
 
-`src/profile.py` quét từng CSV bằng `csv.DictReader`, không tải toàn bộ 20 triệu dòng vào bộ nhớ. Kết quả đã đo trên dữ liệu được cung cấp:
+`src/ingestion/profiling.py` quét từng CSV bằng `csv.DictReader`, không tải toàn bộ 20 triệu dòng vào bộ nhớ. Kết quả đã đo trên dữ liệu được cung cấp:
 
-| Nguồn | Kết quả đáng chú ý |
-|---|---|
-| Rating | 20.000.263 dòng; không ô trống; 138.493 user; 26.744 movie được đánh giá |
-| Rating key | File không giảm theo `(userId, movieId)`; không phát hiện cặp trùng nào trong toàn bộ file |
-| Rating range | Có đủ 10 mức từ 0,5 đến 5,0; thời gian từ 1995-01-09 đến 2015-03-31 |
-| Skew | User nhiều rating nhất có 9.254, trung vị 68; movie nhiều rating nhất có 67.310 |
-| Tag | 465.564 dòng, trong đó có 7 tag trống hoặc chỉ có khoảng trắng |
-| Movie | 27.278 dòng; 26 title không có năm ở cuối; 246 phim dùng sentinel `(no genres listed)` |
-| Link | 27.278 dòng; thiếu 252 TMDb ID; IMDb ID có đủ |
-| Genome | 11.709.768 score và 1.128 genome tag |
+| Nguồn        | Kết quả đáng chú ý                                                                         |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| Rating       | 20.000.263 dòng; không ô trống; 138.493 user; 26.744 movie được đánh giá                   |
+| Rating key   | File không giảm theo `(userId, movieId)`; không phát hiện cặp trùng nào trong toàn bộ file |
+| Rating range | Có đủ 10 mức từ 0,5 đến 5,0; thời gian từ 1995-01-09 đến 2015-03-31                        |
+| Skew         | User nhiều rating nhất có 9.254, trung vị 68; movie nhiều rating nhất có 67.310            |
+| Tag          | 465.564 dòng, trong đó có 7 tag trống hoặc chỉ có khoảng trắng                             |
+| Movie        | 27.278 dòng; 26 title không có năm ở cuối; 246 phim dùng sentinel `(no genres listed)`     |
+| Link         | 27.278 dòng; thiếu 252 TMDb ID; IMDb ID có đủ                                              |
+| Genome       | 11.709.768 score và 1.128 genome tag                                                       |
 
 Script xác nhận rating file được sắp không giảm theo cặp khóa và không có cặp lặp. Vì thứ tự khóa đã được xác minh trên toàn file, so sánh từng cặp liên tiếp là đủ để kiểm tra trùng trong snapshot này. Nếu thứ tự thay đổi, phải dùng external sort hoặc kho khóa ngoài RAM để kiểm tra chính xác.
 
@@ -82,14 +84,14 @@ Các rule referential integrity được tính ở giai đoạn báo cáo: ratin
 
 ### 5.1. Mapping sang `InteractionEvent`
 
-| Trường CDM | MovieLens rating/tag | Giải thích |
-|---|---|---|
-| `party_id` | `userId` | ID người dùng |
-| `content_id` | `movieId` | ID phim |
-| `event_type` | Tên bảng | `RATING` hoặc `TAG` |
-| `event_value` | `rating × 20` | Rating 0,5–5,0 đổi thành thang 0–100; TAG để null vì không phải số |
-| `event_text` | `tag` | Giữ nội dung tag sau khi trim; rating để null |
-| `event_time_utc` | `timestamp` | Chuẩn hóa về ISO UTC; hỗ trợ cả chuỗi thời gian quan sát được lẫn epoch |
+| Trường CDM       | MovieLens rating/tag | Giải thích                                                              |
+| ---------------- | -------------------- | ----------------------------------------------------------------------- |
+| `party_id`       | `userId`             | ID người dùng                                                           |
+| `content_id`     | `movieId`            | ID phim                                                                 |
+| `event_type`     | Tên bảng             | `RATING` hoặc `TAG`                                                     |
+| `event_value`    | `rating × 20`        | Rating 0,5–5,0 đổi thành thang 0–100; TAG để null vì không phải số      |
+| `event_text`     | `tag`                | Giữ nội dung tag sau khi trim; rating để null                           |
+| `event_time_utc` | `timestamp`          | Chuẩn hóa về ISO UTC; hỗ trợ cả chuỗi thời gian quan sát được lẫn epoch |
 
 Mapping được áp dụng ở `events_to_silver()`. Khi thêm IMDb hoặc log xem phim, ta chỉ cần viết adapter map tên cột, đơn vị điểm và múi giờ về các trường CDM này.
 
@@ -123,12 +125,12 @@ Surrogate key giúp fact giữ tham chiếu ổn định khi thuộc tính dimen
 
 ### 6.2. Lựa chọn SCD
 
-| Thuộc tính | SCD | Lý do |
-|---|---|---|
-| `genres` | Type 2 | Cần biết phim thuộc thể loại nào ở thời điểm lịch sử; thay đổi thể loại có ý nghĩa phân tích |
-| `is_deleted` | Type 2 | Gỡ phim là thay đổi trạng thái nghiệp vụ; vẫn giữ phim cho fact lịch sử |
-| Sửa lỗi `title`/`release_year` | Type 1 | Sửa lỗi hiển thị/metadata; cập nhật qua các phiên bản thay vì coi là thay đổi nghiệp vụ |
-| `previous_title`, `changed_date` | Type 3 | Chỉ cần so sánh nhãn hiện tại với nhãn ngay trước đó |
+| Thuộc tính                       | SCD    | Lý do                                                                                        |
+| -------------------------------- | ------ | -------------------------------------------------------------------------------------------- |
+| `genres`                         | Type 2 | Cần biết phim thuộc thể loại nào ở thời điểm lịch sử; thay đổi thể loại có ý nghĩa phân tích |
+| `is_deleted`                     | Type 2 | Gỡ phim là thay đổi trạng thái nghiệp vụ; vẫn giữ phim cho fact lịch sử                      |
+| Sửa lỗi `title`/`release_year`   | Type 1 | Sửa lỗi hiển thị/metadata; cập nhật qua các phiên bản thay vì coi là thay đổi nghiệp vụ      |
+| `previous_title`, `changed_date` | Type 3 | Chỉ cần so sánh nhãn hiện tại với nhãn ngay trước đó                                         |
 
 `movies_to_gold()` đóng phiên bản hiện hành bằng `effective_to`, đặt `is_current=0`, rồi thêm dòng version mới khi thể loại hoặc trạng thái xóa đổi. Mỗi phiên bản có `movie_sk`, `version`, `effective_from`, `effective_to`. Với chỉnh sửa title/year, code cập nhật xuyên các phiên bản và lưu previous title/date ở dòng hiện hành.
 
@@ -162,7 +164,7 @@ Ngưỡng hidden gem được công khai để có thể điều chỉnh. Nếu 
 
 ## 8. Giai đoạn 6 — Orchestration
 
-Trong `dags/cineinsight_daily.py`, DAG có ba task theo thứ tự:
+Trong `dags/cineinsight_pipeline.py`, DAG có ba task theo thứ tự:
 
 1. `landing_verify`: gọi `pipeline.py init`.
 2. `bronze_silver_incremental`: gọi `pipeline.py run --as-of {{ ds }}`; task này điều phối các bước xử lý còn lại trong script.
@@ -181,13 +183,14 @@ Nếu được hỏi “đưa lên production thế nào?”, trả lời: giữ
 Từ thư mục gốc project:
 
 ```powershell
-python .\src\profile.py
+python src/ingestion/profiling.py
 python .\src\pipeline.py init
 python .\src\pipeline.py run --chunk-size 100000
 python .\src\pipeline.py report
+python src/analytics/export_notebook_html.py
 ```
 
-Hồ sơ nguồn đã được tạo tại `lakehouse/reports/profile.json`. Lần materialization đầy đủ đã được dừng theo yêu cầu vì database local không phải deliverable của bài. Vì vậy không trình bày các mart trong database hiện tại như kết quả đã hoàn tất; muốn tái tạo kết quả thì chạy lại pipeline trong môi trường có đủ thời gian và dung lượng. Các thành phần để nộp là code, DAG, tài liệu, notebook và HTML preview; không cần nộp `lakehouse/` hay file CSV nguồn.
+Pipeline đã chạy end-to-end; database điều khiển nằm tại `control/cineinsight.db`, còn Landing và báo cáo nằm trong `lakehouse/`. Regenerate HTML preview sau khi tạo mart để cập nhật các bảng phân tích. Không cần nộp database hay bản sao Landing.
 
 ## 11. Câu hỏi giảng viên có thể hỏi
 

@@ -1,0 +1,18 @@
+{
+  "paths": {
+    "source": "MovieLens",
+    "lakehouse": "lakehouse",
+    "control_database": "control/cineinsight.db"
+  },
+  "processing": {
+    "default_chunk_size": 100000
+  },
+  "expected_rows": {
+    "rating": 20000263,
+    "tag": 465564,
+    "movie": 27278,
+    "link": 27278,
+    "genome_tags": 1128,
+    "genome_scores": 11709768
+  }
+}

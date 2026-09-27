@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
-lakehouse/*.db
-lakehouse/*.db-shm
-lakehouse/*.db-wal
+control/*.db
+control/*.db-shm
+control/*.db-wal
 lakehouse/landing/
+lakehouse/reports/

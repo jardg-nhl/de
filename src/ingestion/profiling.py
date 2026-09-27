@@ -4,7 +4,7 @@ from collections import Counter
 from pathlib import Path
 from datetime import datetime, timezone
 
-ROOT=Path(__file__).resolve().parents[1]; DATA=ROOT/"MovieLens"; OUT=ROOT/"lakehouse"/"reports"/"profile.json"
+ROOT=Path(__file__).resolve().parents[2]; CONFIG=json.loads((ROOT/"config"/"pipeline.json").read_text(encoding="utf-8")); DATA=ROOT/CONFIG["paths"]["source"]; OUT=ROOT/CONFIG["paths"]["lakehouse"]/"reports"/"profile.json"
 SPECS={"rating.csv":["userId","movieId","rating","timestamp"],"tag.csv":["userId","movieId","tag","timestamp"],"movie.csv":["movieId","title","genres"],"link.csv":["movieId","imdbId","tmdbId"],"genome_scores.csv":["movieId","tagId","relevance"],"genome_tags.csv":["tagId","tag"]}
 def profile(path):
     rows=nulls=0; counts=Counter(); ratings=Counter(); years=Counter(); per_user=Counter(); ids=Counter(); tsmin=tsmax=None; dups=0; last_key=None; sorted_keys=True; full_dups=0
