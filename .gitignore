@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+lakehouse/*.db
+lakehouse/*.db-shm
+lakehouse/*.db-wal
+lakehouse/landing/
